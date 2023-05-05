@@ -1,0 +1,101 @@
+library(rayshader)
+library(raster)
+library(dplyr)
+library(ggplot2)
+library(sf)
+library(tigris)
+library(stars)
+library(MetBrewer)
+library(colorspace)
+library(rayrender)
+library(readxl)
+
+plot_data=read_excel('retail.xlsx')
+plot_data <- plot_data[, c("Lat", "Long", "Net_Sales")]
+plot_data <- plot_data %>% filter(Lat != 0)
+#write.csv(plot_data, "test1.csv")
+bryce = raster("data/japan_dem.tif")
+
+bryce_small = raster_to_matrix(bryce)
+bryce_small <- t(bryce_small)
+bb<- st_bbox(bryce)
+height=bb[["ymax"]]-bb[["ymin"]]
+width=bb[["xmax"]]-bb[["xmin"]]
+nrows=dim(bryce_small)[1]
+ncols=dim(bryce_small)[2]
+v_len=height/nrows
+h_len=width/ncols
+bryce_small[bryce_small>0] <- 1
+
+plot_data["x_loc"]=as.integer(unlist((bb[["ymax"]]-plot_data["Lat"])/h_len))
+plot_data["y_loc"]=as.integer(unlist((plot_data["Long"]-bb[["xmin"]])/v_len))
+bryce_small[cbind(plot_data$x_loc,plot_data$y_loc)] <- plot_data$Net_Sales
+plot_data
+
+#m2<-cbind(NA,rbind(NA,bryce_small,NA),NA)
+indices <- which(bryce_small > 1, arr.ind = TRUE)
+
+for(i in 1:dim(indices)[1]){
+  nrow_m=indices[i,1]
+  ncol_m=indices[i,2]
+  n_expansion <- as.integer(log2(bryce_small[nrow_m,ncol_m]))-1
+  for (exp_n in 1:n_expansion){
+    for (x in (-2*exp_n):(2*exp_n)){
+      for (y in (-2*exp_n):(2*exp_n)){
+        if (!is.na(bryce_small[nrow_m+x,ncol_m+y])){
+          if (bryce_small[nrow_m+x,ncol_m+y]==1){
+            a=1
+            if (abs(x)==2*exp_n || abs(y)==2*exp_n || abs(x)==2*exp_n-1 || abs(y)==2*exp_n-1)
+              bryce_small[nrow_m+x,ncol_m+y]=bryce_small[nrow_m+x,ncol_m+y]+bryce_small[nrow_m,ncol_m]/2^(exp_n-1)-1
+      }}}}}}
+#bryce_small = resize_matrix(bryce_mat,0.25)
+#bryce_small[which(bryce_small > 1, arr.ind = TRUE)] <- bryce_small[which(bryce_small > 1)]
+#write.csv(bryce_small, "test.csv")
+
+bryce_small <- t(bryce_small)
+bryce_small %>%
+  height_shade() %>%
+  add_overlay(sphere_shade(bryce_small, texture = "desert",
+                           zscale=4, colorintensity = 5), alphalayer=0.5) %>%
+  add_shadow(lamb_shade(bryce_small,zscale=6), 2) %>%
+  add_shadow(ambient_shade(bryce_small), 2) %>%
+  add_shadow(texture_shade(bryce_small,detail=8/10,contrast=9,brightness = 10), 0.1) %>%
+  plot_map()
+
+c1 <- met.brewer("VanGogh3")
+swatchplot(c1)
+
+texture <- grDevices::colorRampPalette(c1, bias = 2)(256)
+swatchplot(texture)
+
+bryce_small |>
+  height_shade(texture = texture) |>
+  plot_3d(heightmap = bryce_small,
+          zscale = 100/10,
+          solid = FALSE,
+          shadowdepth = 0)
+
+render_camera(theta = -20, phi = 45, zoom = .5)
+outfile <- "images/final_plot.png"
+
+{
+  start_time <- Sys.time()
+  cat(crayon::cyan(start_time), "\n")
+  if (!file.exists(outfile)) {
+    png::writePNG(matrix(1), target = outfile)
+  }
+  render_highquality(
+    filename = outfile,
+    interactive = FALSE,
+    lightdirection = 280,
+    lightaltitude = c(20, 80),
+    lightcolor = c(c1[2], "white"),
+    lightintensity = c(600, 100),
+    samples = 450,
+    width = 6000,
+    height = 6000
+  )
+  end_time <- Sys.time()
+  diff <- end_time - start_time
+  cat(crayon::cyan(diff), "\n")
+}
